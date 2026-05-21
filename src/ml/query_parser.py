@@ -128,18 +128,55 @@ class RuleBasedIntentDetector(BaseIntentDetector):
             combined += f"{i+1}. {r}\n"
         return combined
 
-class LLMIntentDetector(BaseIntentDetector):
-    """Wrapper ready to use OpenAI/LLM for multi-intent detection and synthesis in the future."""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key
-        # We would initialize openai.AsyncClient here
+import logging
+from src.ml.local_llm_service import LocalLLMService
+
+logger = logging.getLogger(__name__)
+
+class HybridIntentDetector(BaseIntentDetector):
+    """
+    Implements a 'Local LLM First' execution path.
+    Falls back to RuleBasedIntentDetector if LLM fails or is unavailable.
+    """
+    def __init__(self, local_llm: Optional['LocalLLMService'] = None):
+        self.local_llm = local_llm or LocalLLMService()
+        self.rule_based = RuleBasedIntentDetector()
 
     async def decompose_async(self, query: str) -> MultiIntentQuery:
-        # if not self.api_key: fallback to RuleBasedIntentDetector
-        # Else: Prompt LLM to return JSON of subqueries
-        pass
+        try:
+            # Attempt Local LLM First
+            sub_queries_texts = await self.local_llm.decompose_query(query)
+            if not isinstance(sub_queries_texts, list) or not sub_queries_texts:
+                raise ValueError("Invalid decomposition result from LLM")
+
+            # Map to exact MultiIntentQuery payload
+            sub_queries = []
+            for part in sub_queries_texts:
+                part = part.strip()
+                if not part: continue
+                intent_type = self.rule_based._determine_intent(part)
+                sq_id = f"sq_{hashlib.sha256(part.encode()).hexdigest()[:8]}"
+                sq = SubQuery(id=sq_id, text=part, intent_type=intent_type)
+                sq.cache_key = sq.generate_cache_key()
+                sub_queries.append(sq)
+            
+            confidence = 1.0 if len(sub_queries) == 1 else 0.9
+            return MultiIntentQuery(
+                original_query=query, 
+                sub_queries=sub_queries, 
+                decomposition_confidence=confidence
+            )
+        except Exception as e:
+            logger.warning(f"Local LLM decomposition failed, falling back to rule-based: {e}")
+            return self.rule_based.decompose(query)
 
     async def synthesize_async(self, original_query: str, responses: List[str]) -> str:
-        # Prompt LLM to unify responses narratively
-        pass
+        try:
+            # Attempt Local LLM First
+            result = await self.local_llm.synthesize_response(original_query, responses)
+            if not result:
+                raise ValueError("Empty synthesis result")
+            return result
+        except Exception as e:
+            logger.warning(f"Local LLM synthesis failed, falling back to rule-based: {e}")
+            return self.rule_based.synthesize(original_query, responses)

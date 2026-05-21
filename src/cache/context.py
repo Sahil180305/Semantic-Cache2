@@ -55,22 +55,28 @@ class SmartCacheRouter:
         rewritten_query = await self.local_llm.rewrite_query(query, history)
         logger.info(f"Original query: '{query}' -> Standalone query: '{rewritten_query}'")
         
-        # Step 2: Decompose query
-        sub_queries = await self.local_llm.decompose_query(rewritten_query)
+        # Step 2: Decompose query via Hybrid Detector
+        from src.ml.query_parser import HybridIntentDetector
+        hybrid_detector = HybridIntentDetector(self.local_llm)
+        multi_intent = await hybrid_detector.decompose_async(rewritten_query)
+        sub_queries = [sq.text for sq in multi_intent.sub_queries]
         logger.info(f"Decomposed sub-queries: {sub_queries}")
         
-        # Step 3: Parallel Cache Search
-        tasks = [
-            self.cache_manager.get_semantic_async(
-                query_text=sq,
-                tenant_id=tenant_id,
-                domain=domain,
-                threshold=threshold,
-                **kwargs
-            ) for sq in sub_queries
-        ]
-        
-        results = await asyncio.gather(*tasks)
+        # Step 3: Parallel Cache Search (per-sub-query errors degrade to miss)
+        async def _safe_semantic_lookup(sq: str):
+            try:
+                return await self.cache_manager.get_semantic_async(
+                    query_text=sq,
+                    tenant_id=tenant_id,
+                    domain=domain,
+                    threshold=threshold,
+                    **kwargs
+                )
+            except Exception as e:
+                logger.error(f"Cache lookup failed for '{sq}' (treating as miss): {e}")
+                return None
+
+        results = await asyncio.gather(*[_safe_semantic_lookup(sq) for sq in sub_queries])
         
         # Analyze hits
         sub_results = []
@@ -140,7 +146,7 @@ class SmartCacheRouter:
                     for item in sub_results
                 ]
                 
-                synthesized = await self.local_llm.synthesize_response(query, sub_answers)
+                synthesized = await hybrid_detector.synthesize_async(query, sub_answers)
                 
                 # Also store the synthesized response for the full query
                 await self.cache_manager.put_semantic_async(
@@ -212,7 +218,10 @@ class SmartCacheRouter:
         """
         history = conversation_history or []
         rewritten_query = await self.local_llm.rewrite_query(query, history)
-        sub_queries = await self.local_llm.decompose_query(rewritten_query)
+        from src.ml.query_parser import HybridIntentDetector
+        hybrid_detector = HybridIntentDetector(self.local_llm)
+        multi_intent = await hybrid_detector.decompose_async(rewritten_query)
+        sub_queries = [sq.text for sq in multi_intent.sub_queries]
         
         tasks = [
             self.cache_manager.get_semantic_async(
@@ -255,7 +264,7 @@ class SmartCacheRouter:
                     {"query": item["query"], "response": item["response"]}
                     for item in sub_results
                 ]
-                synthesized = await self.local_llm.synthesize_response(query, sub_answers)
+                synthesized = await hybrid_detector.synthesize_async(query, sub_answers)
                 return {
                     "hit": True,
                     "response": synthesized,

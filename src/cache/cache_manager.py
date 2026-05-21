@@ -176,7 +176,9 @@ class CacheManager:
         self._domain_classifier = domain_classifier
         self._threshold_manager = threshold_manager
         self._query_normalizer = QueryNormalizer()
-        self._intent_detector = RuleBasedIntentDetector()
+        from src.ml.local_llm_service import LocalLLMService
+        from src.ml.query_parser import HybridIntentDetector
+        self._intent_detector = HybridIntentDetector(LocalLLMService())
         
         from src.core.circuit_breaker import CircuitBreaker
         self.embedding_breaker = CircuitBreaker(name="embedding_service", failure_threshold=5, recovery_timeout=30)
@@ -279,7 +281,11 @@ class CacheManager:
                 l3_ok = True
                 
                 if self.l2_cache is not None:
-                    l2_ok = self.l2_cache.put(entry)
+                    try:
+                        l2_ok = self.l2_cache.put(entry)
+                    except Exception as e:
+                        logger.warning(f"L2 cache write failed (non-fatal): {e}")
+                        l2_ok = False
                 
                 # Also write to L3 for persistence
                 if self.l3_cache is not None:
@@ -352,7 +358,12 @@ class CacheManager:
             
             # Check L2 if available
             if self.l2_cache is not None:
-                entry = self.l2_cache.get(query_id)
+                try:
+                    entry = self.l2_cache.get(query_id)
+                except Exception as e:
+                    logger.error(f"L2 cache retrieval error (treating as miss): {e}")
+                    entry = None
+                
                 if entry is not None:
                     self.metrics.record_hit("L2")
                     logger.debug(f"L2 hit for {query_id}")
@@ -820,7 +831,7 @@ class CacheManager:
         normalized_query = self._query_normalizer.normalize(query_text)
         
         # Decompose
-        multi_intent = self._intent_detector.decompose(normalized_query)
+        multi_intent = await self._intent_detector.decompose_async(normalized_query)
         
         results = {
             "original_query": query_text,
@@ -872,7 +883,7 @@ class CacheManager:
                 
         results["hit_ratio"] = hits / len(multi_intent.sub_queries)
         if results["all_hit"]:
-            results["synthesized_response"] = self._intent_detector.synthesize(normalized_query, [str(r) for r in responses])
+            results["synthesized_response"] = await self._intent_detector.synthesize_async(normalized_query, [str(r) for r in responses])
             
         return results
     

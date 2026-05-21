@@ -19,10 +19,9 @@ async def test_local_llm_service_fallback():
     )
     assert rewritten == "Who created it?"
 
-    # It should gracefully return the single query or simple split when offline
+    # decompose_query falls back to single-intent list when Ollama is unavailable
     decomposed = await service.decompose_query("Compare Python and Java")
-    assert len(decomposed) >= 1
-    assert "Compare" in decomposed[0] or "Python" in decomposed[0]
+    assert decomposed == ["Compare Python and Java"]
 
 @pytest.mark.asyncio
 async def test_smart_cache_router_stateless_single_intent():
@@ -52,7 +51,7 @@ async def test_smart_cache_router_stateless_single_intent():
     assert result["source"] == "llm_generated"
     assert result["rewritten_query"] == "Who created Python?"
     
-    # Verify write-through cache was called for rewritten query
+    external_llm.generate_response.assert_called_once()
     cache_manager.put_semantic_async.assert_called_with(
         query_text="Who created Python?",
         response="Guido van Rossum created Python.",
@@ -60,6 +59,37 @@ async def test_smart_cache_router_stateless_single_intent():
         domain="general",
         metadata={"source": "llm_generated"}
     )
+
+
+@pytest.mark.asyncio
+async def test_smart_cache_router_cache_error_falls_back_to_llm():
+    """Cache lookup exception on sub-query: treat as miss, call external LLM."""
+    cache_manager = MagicMock()
+    cache_manager.get_semantic_async = AsyncMock(
+        side_effect=ConnectionError("Redis connection refused")
+    )
+    cache_manager.put_semantic_async = AsyncMock(return_value=True)
+
+    local_llm = MagicMock()
+    local_llm.rewrite_query = AsyncMock(return_value="What is Redis?")
+    local_llm.decompose_query = AsyncMock(return_value=["What is Redis?"])
+
+    router = SmartCacheRouter(cache_manager, None, local_llm=local_llm)
+
+    external_llm = MagicMock()
+    external_llm.generate_response = AsyncMock(return_value="Redis is an in-memory datastore.")
+
+    result = await router.handle_chat(
+        query="Tell me about it",
+        history=[],
+        llm_service=external_llm,
+    )
+
+    assert result["hit"] is False
+    assert result["response"] == "Redis is an in-memory datastore."
+    assert result["source"] == "llm_generated"
+    external_llm.generate_response.assert_called_once()
+    cache_manager.put_semantic_async.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_smart_cache_router_stateless_multi_intent_all_hit():
@@ -86,15 +116,20 @@ async def test_smart_cache_router_stateless_multi_intent_all_hit():
     local_llm.synthesize_response = AsyncMock(return_value="Python is dynamic while Java is static.")
     
     router = SmartCacheRouter(cache_manager, None, local_llm=local_llm)
-    
+
+    external_llm = MagicMock()
+    external_llm.generate_response = AsyncMock()
+
     result = await router.handle_chat(
         query="Compare Python and Java",
-        history=[]
+        history=[],
+        llm_service=external_llm,
     )
     
     assert result["hit"] is True
     assert result["response"] == "Python is dynamic while Java is static."
     assert result["source"] == "synthesized_cache"
+    external_llm.generate_response.assert_not_called()
     
     # Verify write-through stored the synthesized response for the full query
     cache_manager.put_semantic_async.assert_called_with(

@@ -3,7 +3,6 @@ Configuration management for Semantic Cache system.
 
 Handles loading and validation of configuration from YAML, environment variables, and CLI.
 """
-
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -220,13 +219,28 @@ class LLMConfig:
     provider: str = "gemini"
     api_key: Optional[str] = None
     model: str = "gemini-pro"
+    
+    # Local LLM (Ollama) configuration
+    local_base_url: str = "http://localhost:11434"
+    local_model: str = "qwen2.5:1.5b"
+    local_temperature: float = 0.7
+    local_timeout: float = 60.0
+    local_stream_timeout: float = 120.0
 
     def validate(self) -> None:
         """Validate LLM configuration."""
-        if self.provider not in ["gemini", "openai"]:
+        valid_providers = ["gemini", "openai", "local", "ollama"]
+        if self.provider not in valid_providers:
             raise ConfigurationValidationError(
-                "llm.provider", "Must be one of: gemini, openai"
+                "llm.provider", f"Must be one of: {', '.join(valid_providers)}"
             )
+            
+        # Validate local URL format if local provider is used
+        if self.provider in ["local", "ollama"]:
+            if not self.local_base_url.startswith(("http://", "https://")):
+                raise ConfigurationValidationError(
+                    "llm.local_base_url", "Must be a valid URL starting with http:// or https://"
+                )
 
 
 @dataclass
@@ -346,6 +360,9 @@ class ConfigLoader:
                 )
             if "monitoring" in yaml_config:
                 self.config.monitoring = MonitoringConfig(**yaml_config["monitoring"])
+            # Added missing LLM YAML loading
+            if "llm" in yaml_config:
+                self.config.llm = LLMConfig(**yaml_config["llm"])
 
         except Exception as e:
             raise ConfigurationError(f"Failed to parse YAML configuration: {e}")
@@ -391,6 +408,18 @@ class ConfigLoader:
             self.config.llm.api_key = llm_api_key
         if llm_model := os.getenv("LLM_MODEL"):
             self.config.llm.model = llm_model
+            
+        # Local LLM (Ollama) configuration from ENV
+        if local_base_url := os.getenv("LOCAL_LLM_BASE_URL"):
+            self.config.llm.local_base_url = local_base_url
+        if local_model := os.getenv("LOCAL_LLM_MODEL"):
+            self.config.llm.local_model = local_model
+        if local_temp := os.getenv("LOCAL_LLM_TEMPERATURE"):
+            self.config.llm.local_temperature = float(local_temp)
+        if local_timeout := os.getenv("LOCAL_LLM_TIMEOUT"):
+            self.config.llm.local_timeout = float(local_timeout)
+        if local_stream_timeout := os.getenv("LOCAL_LLM_STREAM_TIMEOUT"):
+            self.config.llm.local_stream_timeout = float(local_stream_timeout)
 
         logger.debug("Environment variables applied to configuration")
 

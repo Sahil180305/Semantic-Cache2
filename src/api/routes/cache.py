@@ -2,6 +2,7 @@
 
 import time
 import json
+import logging
 from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException, status, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ from src.cache.base import CacheEntry
 from src.cache.streaming import StreamingCache
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -472,13 +474,17 @@ async def semantic_cache_search(
     
     start_time = time.time()
     
-    # Use semantic search
-    result = await cache_manager.get_semantic_async(
-        query_text=body.query,
-        tenant_id=tenant_id,
-        domain=body.domain,
-        threshold=body.threshold,
-    )
+    # Use semantic search (cache errors degrade to miss, not 5xx)
+    try:
+        result = await cache_manager.get_semantic_async(
+            query_text=body.query,
+            tenant_id=tenant_id,
+            domain=body.domain,
+            threshold=body.threshold,
+        )
+    except Exception as e:
+        logger.error(f"Cache lookup failed (treating as miss): {e}")
+        result = None
     
     latency_ms = (time.time() - start_time) * 1000
     
@@ -498,7 +504,7 @@ async def semantic_cache_search(
     
     llm_service = getattr(request.app.state, 'llm_service', None)
     
-    if llm_service and llm_service.api_key:
+    if llm_service:
         generated_response = await llm_service.generate_response(body.query)
         
         if generated_response and not generated_response.startswith("Error:"):
@@ -648,7 +654,7 @@ async def semantic_cache_stream(
     # Miss -> generate
     llm_service = getattr(request.app.state, 'llm_service', None)
     
-    if llm_service and llm_service.api_key:
+    if llm_service:
         generator = stream_cache.stream_and_cache(
             query_key, 
             llm_service.generate_stream(query_key), 

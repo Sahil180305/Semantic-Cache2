@@ -371,6 +371,47 @@ class TestCacheManagerTiered:
         assert manager.l1_cache.size() == 0
 
 
+class TestCacheManagerL2Resilience:
+    """L2 failures must degrade to miss / non-fatal write, not crash requests."""
+
+    def test_l2_get_error_treated_as_miss(self):
+        config = CacheManagerConfig(strategy=CacheStrategy.WRITE_THROUGH)
+        manager = CacheManager(config)
+        manager._initialized = True
+        manager.l1_cache = MagicMock()
+        manager.l1_cache.get.return_value = None
+        manager.l2_cache = MagicMock()
+        manager.l2_cache.get.side_effect = ConnectionError("Redis connection refused")
+        manager.l3_cache = None
+
+        result = manager.get("tenant_001:abc123")
+
+        assert result is None
+        manager.l2_cache.get.assert_called_once_with("tenant_001:abc123")
+        assert manager.metrics.misses == 1
+
+    def test_l2_put_error_does_not_raise(self):
+        config = CacheManagerConfig(strategy=CacheStrategy.WRITE_THROUGH)
+        manager = CacheManager(config)
+        manager._initialized = True
+        manager.l1_cache = MagicMock()
+        manager.l1_cache.put.return_value = True
+        manager.l2_cache = MagicMock()
+        manager.l2_cache.put.side_effect = ConnectionError("Redis connection refused")
+        manager.l3_cache = None
+
+        entry = CacheEntry(
+            query_id="tenant_001:abc123",
+            query_text="test",
+            embedding=[0.1] * 384,
+            response="resp",
+        )
+        result = manager.put(entry)
+
+        assert result is False
+        manager.l1_cache.put.assert_called_once()
+
+
 # ============================================================================
 # Test: Cache Strategies
 # ============================================================================

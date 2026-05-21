@@ -29,3 +29,27 @@ def test_rule_based_intent_detector():
     syn = detector.synthesize("test", ["Answer 1", "Answer 2"])
     assert "1. Answer 1" in syn
     assert "2. Answer 2" in syn
+
+@pytest.mark.asyncio
+async def test_hybrid_intent_detector_fallback():
+    from src.ml.query_parser import HybridIntentDetector
+    
+    class MockLocalLLMService:
+        async def decompose_query(self, query: str):
+            raise Exception("Simulated LLM failure")
+            
+        async def synthesize_response(self, query: str, answers: list):
+            raise Exception("Simulated LLM failure")
+            
+    hybrid = HybridIntentDetector(local_llm=MockLocalLLMService())
+    
+    # Test decompose fallback
+    res = await hybrid.decompose_async("What is Python, and how to use it")
+    assert len(res.sub_queries) == 2
+    assert res.sub_queries[0].text == "What is Python"
+    assert res.sub_queries[1].text == "how to use it"
+    
+    # Test synthesize fallback
+    syn = await hybrid.synthesize_async("test", ["Answer 1", "Answer 2"])
+    assert "1. Answer 1" in syn
+    assert "2. Answer 2" in syn
