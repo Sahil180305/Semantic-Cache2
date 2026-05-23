@@ -1,97 +1,71 @@
-# Production Deployment Guide
+# Deployment Guide
 
-This document outlines standard procedures for deploying the multi-tier semantic cache microservice and its accompanying Next.js visual frontends to production clusters.
+## Local Container Stack
 
----
-
-## 🚀 Backend Service Deployment
-
-### 1. Containerized Stack (Recommended)
-The fastest path to production is deploying the backend service via the optimized production Docker Compose file:
+Use Docker Compose for infrastructure:
 
 ```bash
-# Build and run with production settings
-docker-compose -f docker-compose.prod.yml up --build -d
+docker-compose up -d
 ```
 
-### 2. Microservice Scale-out (Kubernetes)
-For high-availability clusters, scale out Uvicorn workers and cache nodes horizontally:
+This starts:
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: semantic-cache-api
-spec:
-  replicas: 3
-  template:
-    spec:
-      containers:
-      - name: api
-        image: semantic-cache-api:latest
-        resources:
-          requests:
-            memory: "1Gi"
-            cpu: "500m"
-          limits:
-            memory: "2Gi"
-            cpu: "1000m"
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: cache-secrets
-              key: db-url
-        - name: REDIS_HOST
-          value: "redis-cluster.cache.svc.cluster.local"
+- Redis on `6379`
+- PostgreSQL on `5432`
+- Prometheus on `9090`
+- Grafana on `3000`
+
+Run the API separately during development:
+
+```bash
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-> [!IMPORTANT]
-> When scaling out behind a Load Balancer, the L1 caches remain synchronized in real-time across instances using built-in Redis Pub/Sub invalidation events (`src/cache/l2_cache.py`).
+## Production Checklist
 
----
+- Set a strong `JWT_SECRET_KEY`.
+- Use a production PostgreSQL URL.
+- Use a protected Redis instance.
+- Disable development token generation by setting `ENVIRONMENT` away from `development`.
+- Provide `LLM_API_KEY` only through secrets management.
+- Configure CORS to trusted origins.
+- Run syntax checks and the test suite.
+- Decide whether analytics routes are part of production and mount them if needed.
 
-## 🎨 Next.js Frontends Deployment
+## Suggested Runtime
 
-Deploy the Visual Suite (`dashboard` and `chat-app`) to high-performance cloud providers (Vercel, AWS ECS, or Docker).
-
-### 1. Vercel deployment (Recommended)
-Both applications are standard Next.js apps, allowing seamless deployment to **Vercel**:
-1. Connect your Git repository to Vercel.
-2. Set the **Root Directory** to `frontend-services/dashboard` or `frontend-services/chat-app`.
-3. Set the Environment Variables as listed below.
-4. Click **Deploy**.
-
-### 2. Docker Deployment
-Use multi-stage Dockerfiles inside each frontend folder to build highly compact production images:
-
-```dockerfile
-# Example Next.js production stage
-FROM node:18-alpine AS runner
-WORKDIR /app
-ENV NODE_ENV production
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-EXPOSE 3000
-CMD ["node", "server.js"]
+```bash
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
----
+For containers, build from the repository `Dockerfile` and pass environment variables at runtime.
 
-## ⚙️ Production Environment Checklist
+## Frontends
 
-Before deploying, ensure all of the following environment keys are populated:
+Dashboard:
 
-### Backend Service API
-- `DATABASE_URL` — Production PostgreSQL database string (e.g., AWS RDS or Supabase).
-- `REDIS_HOST` & `REDIS_PORT` — Managed Redis Cache instance (e.g., ElastiCache or Redis Labs).
-- `LLM_PROVIDER` — `"gemini"` or `"openai"`.
-- `LLM_API_KEY` — Production API token with proper billing quotas set.
+```bash
+cd frontend-services/dashboard
+npm run build
+npm run start
+```
 
-### Next.js Dashboard
-- `NEXT_PUBLIC_API_URL` — `http://your-production-backend-url`
-- `NEXT_PUBLIC_WS_URL` — `ws://your-production-backend-url/ws/realtime`
+Chat app:
 
-### Next.js Chat Client
-- `NEXT_PUBLIC_API_URL` — `http://your-production-backend-url`
+```bash
+cd frontend-services/chat-app
+npm run build
+npm run preview
+```
+
+Before production deployment, replace hard-coded local API URLs with environment-driven configuration.
+
+## Monitoring
+
+The health endpoints are:
+
+- `/health`
+- `/health/detailed`
+- `/metrics`
+
+Prometheus configuration lives in `monitoring/prometheus/prometheus.yml`.

@@ -1,90 +1,62 @@
-# Web Visual Suite Guide
+# Frontend Guide
 
-This guide details the architecture, configuration, and interface features of the **Web Visual Suite**—composed of two specialized Next.js web applications designed to monitor and demo the semantic caching microservice.
+## Apps
 
----
+The repository includes two frontend prototypes under `frontend-services`.
 
-## 🗺️ Architectural Context
+| App | Framework | Status |
+| --- | --- | --- |
+| `dashboard` | Next.js 16, React 19 | Prototype with mostly dummy data |
+| `chat-app` | Vite, React 19 | Chat UI wired to `/api/v1/cache/chat` |
 
-The visual applications sit on top of the backend API, consuming REST endpoints, Server-Sent Events (SSE) streaming connections, and real-time WebSockets to provide a visual playground:
+## Dashboard
 
-```
-                      ┌─────────────────────────┐
-                      │    Next.js Dashboard    │ (Port 3000)
-                      └────────────┬────────────┘
-                                   │ WS /ws/realtime
-                                   ▼
-┌────────────────────────────────────────────────────────────────┐
-│                     FastAPI Cache Backend                      │ (Port 8000)
-└──────────────────────────────────▲─────────────────────────────┘
-                                   │ HTTP POST /chat
-                                   ▼
-                      ┌─────────────────────────┐
-                      │    Next.js Chat App     │ (Port 3001)
-                      └─────────────────────────┘
-```
+Run:
 
----
-
-## 📈 The Analytics Dashboard (`frontend-services/dashboard`)
-
-The dashboard offers a control-room interface visualizing total cost savings, average backend response times, and storage tier partition hit splits in real-time.
-
-### 🧩 Core Visual Features
-1. **Real-time WebSockets:** Connects to `ws://localhost:8000/ws/realtime` to capture live query counts, hit rates, and tier latency states.
-2. **Interactive Charting (Recharts):** Plots dynamic time-series charts detailing L1 vs L2 vs L3 hit distributions, active throughput (qps), and cumulative dollars saved compared to raw LLM calls.
-3. **Top Queries Leaderboard:** Visualizes hot queries, displaying hit counts, average latency, and source domains.
-
-### ⚙️ Quick Start
 ```bash
-# Navigate to dashboard root
 cd frontend-services/dashboard
-
-# Install packages
 npm install
-
-# Start Next.js server
 npm run dev
 ```
-Open **[http://localhost:3000](http://localhost:3000)** in your browser to inspect live metrics.
 
----
+The dashboard pages show overview, patterns, clusters, and cost views. Current backend analytics endpoints are not mounted in `src/api/main.py`, so live metrics require additional backend wiring.
 
-## 💬 The Consumer Chat App (`frontend-services/chat-app`)
+## Chat App
 
-The consumer chat client provides a chat dialogue interface demonstrating stateless query indexing and context-aware session routing.
+Run:
 
-### 🧩 Core Demo Features
-1. **Interactive Latency Badging:** Every response displays a latency badge (e.g., `Memory L1: 1.2ms` or `Warm L2: 7.4ms` or `Postgres L3: 22ms` or `Gemini: 1450ms`) to verify cache performance gains.
-2. **Context-Aware Sandbox:** Automatically appends conversation turns to custom HTTP headers (`X-Conversation-History`) and identifiers (`X-Conversation-Id`), demonstrating the Smart Routing layer.
-3. **SSE Streaming Demonstration:** Visualizes real-time token stream playback utilizing Server-Sent Events (SSE).
-
-### ⚙️ Quick Start
 ```bash
-# Navigate to chat app root
 cd frontend-services/chat-app
-
-# Install packages
 npm install
-
-# Start Next.js server
 npm run dev
 ```
-Open **[http://localhost:3001](http://localhost:3001)** to start a conversation.
 
----
+The chat app posts to:
 
-## 🛠️ Environment Variables Configuration
-
-Both web applications are configured via a `.env.local` file inside their respective folder roots:
-
-### Dashboard Environment (`.env.local`)
-```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/realtime
+```text
+POST http://localhost:8000/api/v1/cache/chat
 ```
 
-### Chat Application Environment (`.env.local`)
-```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
+It sends:
+
+- `Authorization: Bearer <token>`
+- Optional `X-Conversation-Id`
+- Optional `X-Conversation-History`
+- JSON body with `query`, `domain`, `history`, and `context_id`
+
+## Backend Requirements
+
+Start the API before testing either frontend:
+
+```bash
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Generate a token from `/token` and configure the frontend flow to use it.
+
+## Next Frontend Work
+
+- Replace dashboard dummy data with mounted analytics APIs.
+- Add token setup UX or a development token helper.
+- Add loading, error, and unauthorized states.
+- Keep API base URLs configurable instead of hard-coded.

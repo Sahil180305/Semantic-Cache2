@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_MODEL: str = "gemini-pro"
     
+  # Local LLM (from .env)
+    LOCAL_LLM_BASE_URL: str | None = None
+    LOCAL_LLM_MODEL: str | None = None
+    LOCAL_LLM_TEMPERATURE: float | None = None
+    LOCAL_LLM_TIMEOUT: float | None = None
+    LOCAL_LLM_STREAM_TIMEOUT: float | None = None
+
     # Performance
     CONNECTION_POOL_SIZE: int = 20
     BATCH_SIZE: int = 20

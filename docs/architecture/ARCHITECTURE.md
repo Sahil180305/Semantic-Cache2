@@ -1,148 +1,100 @@
-# System Architecture & Design
+# System Architecture
 
-This document details the high-level system architecture, component breakdowns, data flows, and design decisions of the Semantic Caching Layer.
+## Overview
 
----
+Semantic Cache is a FastAPI backend that stores responses by exact key and by semantic meaning. It is designed for LLM applications where repeated or similar prompts should avoid expensive model calls.
 
-## 🗺️ System Overview
-
-The Semantic Caching Layer is a production-ready middleware that sits between conversational or RAG client applications and downstream Large Language Models (LLMs) and vector databases. It optimizes cost, token usage, and speed through a 3-tier similarity-aware caching strategy.
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                       Client Applications                      │
-│             (Next.js Chat Client, RAG systems)                 │
-└───────────────────────────────┬────────────────────────────────┘
-                                │ HTTP POST (/chat, /search)
-                                ▼
-┌────────────────────────────────────────────────────────────────┐
-│                   Semantic Cache Middleware                    │
-│                                                                │
-│   ┌────────────────────────────────────────────────────────┐   │
-│   │                  SmartCacheRouter                      │   │
-│   │  Routes query based on conversational context          │   │
-│   └───────────────────────┬────────────────────────┬───────┘   │
-│                           │                        │           │
-│                           ▼                        ▼           │
-│             ┌─────────────────────────┐  ┌──────────────────┐  │
-│             │   Context-Aware Cache   │  │  Semantic Cache  │  │
-│             │ (Conversational Context)│  │   (Stateless)    │  │
-│             └─────────────────────────┘  └────────┬─────────┘  │
-│                                                   │            │
-│                                                   ▼            │
-│   ┌────────────────────────────────────────────────────────┐   │
-│   │                 3-Tier Caching System                  │   │
-│   │                                                        │   │
-│   │  ┌──────────────────────────────────────────────────┐  │   │
-│   │  │ L1: In-Memory LRU/LFU (with HNSW Index)    <1ms  │  │   │
-│   │  └────────────────────────┬─────────────────────────┘  │   │
-│   │                           ▼                            │   │
-│   │  ┌──────────────────────────────────────────────────┐  │   │
-│   │  │ L2: Distributed Redis Cache               5-10ms  │  │   │
-│   │  └────────────────────────┬─────────────────────────┘  │   │
-│   │                           ▼                            │   │
-│   │  ┌──────────────────────────────────────────────────┐  │   │
-│   │  │ L3: Persistent PostgreSQL + pgvector     10-50ms  │  │   │
-│   │  └──────────────────────────────────────────────────┘  │   │
-│   └────────────────────────────────────────────────────────┘   │
-│                                                                │
-└───────────────────────────────┬────────────────────────────────┘
-                                │ Cache Miss (Auto-Fallback)
-                                ▼
-┌────────────────────────────────────────────────────────────────┐
-│                       Backend Services                         │
-│                                                                │
-│   ┌────────────────────────────────────────────────────────┐   │
-│   │                      LLM Service                       │   │
-│   │   - Gemini REST Integration                            │   │
-│   │   - OpenAI Modular Driver (Stubs)                      │   │
-│   └────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────┘
+```text
+Client
+  -> FastAPI routes
+  -> JWT auth and tenant resolver
+  -> CacheManager
+     -> L1 in-memory cache
+     -> L2 Redis cache
+     -> UnifiedIndexManager
+     -> EmbeddingService
+     -> Domain classifier and adaptive thresholds
+  -> LLMService on miss
 ```
 
----
+## Runtime Startup
 
-## 🧩 Component Breakdown
+`src/api/main.py` performs startup wiring in this order:
 
-### 1. SmartCacheRouter & Context routing
-- **Path:** `src/cache/context.py`
-- **ContextAnalyzer:** Classifies incoming queries as `STATELESS`, `CONTEXTUAL`, or `AMBIGUOUS` based on pronouns, referring phrases, and historical turns.
-- **SmartCacheRouter:** Routes `STATELESS` queries directly to the unified semantic cache. Routes `CONTEXTUAL` queries to the `ContextAwareCache`, generating composite search keys utilizing a hash of the query text blended with session histories (`X-Conversation-History`).
+1. Initialize database tables.
+2. Create the singleton `UnifiedIndexManager`.
+3. Initialize `EmbeddingService` with `all-MiniLM-L6-v2`.
+4. Initialize domain classifier and adaptive threshold manager.
+5. Initialize `CacheManager` and attach index, embedding, domain, and threshold services.
+6. Initialize `SimilaritySearchService` as a facade.
+7. Initialize policies, performance optimizer, tenant manager, predictive warmer, and LLM service.
 
-### 2. The 3-Tier Cache Manager
-- **Path:** `src/cache/cache_manager.py` — Orchestrates data flows and promotions between storage tiers:
-  - **L1 (In-Memory, `src/cache/l1_cache.py`):** Lightning-fast LRU/LFU storage using Python dictionaries. Retrieves values in `<1ms`. Holds the hot, most-frequently accessed entries.
-  - **L2 (Redis Warm Cache, `src/cache/l2_cache.py`):** Distributed Redis cache store. Retains entries in serialized JSON or compressed formats. Promotes values to L1 on cache hits. Latency is `5-10ms`.
-  - **L3 (PostgreSQL Cold Storage, `src/cache/l3_cache.py`):** Persistent relational storage backed by `PostgreSQL` and vectorized index search (`pgvector`). Serves as the ultimate source of truth. Promotes values to L2 and L1 on hit. Latency is `10-50ms`.
+## Main Components
 
-### 3. Sentence-Embedding & Similarity Search
-- **Embedding Service (`src/embedding/`):** Generates 384-dimensional dense vector embeddings of normalized query texts using the local `sentence-transformers` library.
-- **HNSW Index (`src/similarity/`):** A Hierarchical Navigable Small World (HNSW) graph representing query embeddings, enabling sub-millisecond Approximate Nearest Neighbor (ANN) matches.
+### API Layer
 
-### 4. Modular LLM Service
-- **Path:** `src/llm/service.py`
-- Implements a unified interface (`LLMService`) that automatically resolves cache misses:
-  - **Gemini Provider:** Call Google Generative Language API via standard REST requests and Server-Sent Events (SSE) token streaming.
-  - **OpenAI Provider:** Pluggable placeholder stubs for custom GPT-4 integrations.
+The API layer lives in `src/api`. Mounted routes include:
 
----
+- Health: `/health`, `/health/detailed`, `/metrics`
+- Cache: `/api/v1/cache/*`
+- Search: `/api/v1/search`, `/api/v1/similarity/embedding`, `/api/v1/index/stats`
+- Admin: `/api/v1/admin/*`
+- Tenant: `/api/v1/tenant/*`
 
-## 🔄 Sequence Flows
+The app also serves `/docs`, `/redoc`, and `/openapi.json`.
 
-### 1. Unified Cache Query (Hit Flow)
+### Authentication And Tenancy
 
-```mermaid
-sequenceDiagram
-    autonumber
-    Client->>SmartCacheRouter: POST /api/v1/cache/chat (Query + History)
-    SmartCacheRouter->>ContextAnalyzer: Analyze Query Context
-    ContextAnalyzer-->>SmartCacheRouter: Routed as "contextual"
-    SmartCacheRouter->>ContextAwareCache: Look up composite hash key
-    ContextAwareCache->>CacheManager: Check L1 Memory Cache
-    alt L1 Hit
-        CacheManager-->>Client: Response (<1ms)
-    else L1 Miss -> L2 Hit
-        CacheManager->>L2Cache (Redis): Fetch Key
-        L2Cache-->>CacheManager: Entry Found
-        CacheManager->>L1Cache (Memory): Promote Entry to L1
-        CacheManager-->>Client: Response (5-10ms)
-    else L1+L2 Miss -> L3 Hit
-        CacheManager->>L3Cache (Postgres): Fetch pgvector row
-        L3Cache-->>CacheManager: Row Found
-        CacheManager->>L2Cache (Redis): Promote to L2
-        CacheManager->>L1Cache (Memory): Promote to L1
-        CacheManager-->>Client: Response (10-50ms)
-    end
-```
+JWT auth is implemented in `src/api/auth/jwt.py`. Tokens include `sub`, `tenant_id`, `role`, `scopes`, and `exp`.
 
-### 2. Cache Miss & LLM Fallback (Write Flow)
+Tenant IDs are resolved from:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    Client->>SmartCacheRouter: POST /api/v1/cache/semantic/search (Query)
-    SmartCacheRouter->>CacheManager: Search L1 -> L2 -> L3
-    CacheManager-->>SmartCacheRouter: Miss (No entry meets threshold)
-    SmartCacheRouter->>LLMService: Query Gemini API (generate_async)
-    LLMService-->>SmartCacheRouter: Generated Response Text
-    SmartCacheRouter->>CacheManager: put_semantic_async (Asynchronous write task)
-    par Cache Storage Tasks
-        CacheManager->>L1Cache: Add to LRU Memory
-        CacheManager->>L2Cache: Serialized SET in Redis
-        CacheManager->>L3Cache: Insert row in Postgres
-        CacheManager->>HNSW: Add vector node to Graph
-    end
-    SmartCacheRouter-->>Client: Return Response (hit=False, hit_reason="miss_llm_generated")
-```
+- `X-Tenant-Id` when the token role is `admin` or `superadmin`.
+- The token's `tenant_id` for normal users.
 
----
+Cache keys are prefixed internally with the resolved tenant ID.
 
-## 🎨 Premium Visual Integrations
+### Cache Manager
 
-### Next.js Web Analytics Dashboard
-- Visualizes real-time metrics pushed from `/ws/realtime` via persistent WebSockets.
-- Includes animated charts (Recharts) detailing L1/L2/L3 hit splits, latency graphs, and total dollar-cost savings.
+`src/cache/cache_manager.py` coordinates cache reads, writes, semantic lookups, L1/L2 behavior, promotions, and invalidation.
 
-### Next.js Consumer Chat Application
-- Provides a direct sandbox interface calling the `/api/v1/cache/chat` endpoint.
-- Attaches persistent UUID conversational identifiers (`X-Conversation-Id`) and manages state arrays (`X-Conversation-History`) to visually verify contextual cache badging and latency gains.
+L1 is optimized for local low-latency access. L2 is backed by Redis. The unified index is separate from storage and handles semantic lookup.
+
+### Unified Index
+
+`src/cache/index_manager.py` is the shared similarity index path. Cache storage and search flows should use this manager instead of building separate indexes.
+
+### Embeddings
+
+`src/embedding/service.py` creates query embeddings. The current backend startup uses `all-MiniLM-L6-v2`, which produces 384-dimensional vectors.
+
+### LLM Fallback
+
+`src/llm/service.py` supports:
+
+- Gemini REST calls.
+- Local/Ollama calls and streaming.
+- OpenAI placeholders.
+
+When semantic search misses and a provider is configured, the backend can generate a response and cache it.
+
+### Frontends
+
+The repository includes:
+
+- `frontend-services/dashboard`: Next.js dashboard prototype. It currently uses mostly dummy data.
+- `frontend-services/chat-app`: Vite React chat client targeting `/api/v1/cache/chat`.
+
+## Important Gaps
+
+- Analytics routes exist but are not mounted by the main app.
+- Dashboard backend integration is incomplete.
+- OpenAI provider logic is not implemented.
+- Search route and schema modules should be syntax-checked before production use.
+
+## Operational Dependencies
+
+- Redis for L2 cache.
+- PostgreSQL for database-backed project data.
+- Optional Prometheus and Grafana through `docker-compose.yml`.
+- Optional Gemini API key or local Ollama runtime for LLM fallback.

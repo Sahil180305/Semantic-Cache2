@@ -1,0 +1,80 @@
+{
+  "total_requests": 11997,
+  "seed_queries": 2000,
+  "test_duration_seconds": 17144.01132273674,
+  "concurrent_workers": 50,
+  "overall_hit_rate": 0.4502792364757856,
+  "exact_match_rate": 0.16670834375260482,
+  "semantic_match_rate": 0.2142202217220972,
+  "miss_rate": 0.5497207635242144,
+  "l1_hit_rate": 0.33016587480203385,
+  "l2_hit_rate": 0.05076269067266817,
+  "l3_hit_rate": 0.0,
+  "index_hit_rate": 0.0,
+  "domain_hit_rates": {
+    "general": 0.5245568148793955,
+    "technology": 0.46725185685347737,
+    "ecommerce": 0.489247311827957,
+    "medical": 0.3798449612403101,
+    "legal": 0.3200207468879668
+  },
+  "avg_latency_ms": 1336.4080560639454,
+  "p50_latency_ms": 497.9661999968812,
+  "p95_latency_ms": 10519.479099981254,
+  "p99_latency_ms": 15880.523699976038,
+  "min_latency_ms": 19.717600021976978,
+  "max_latency_ms": 28561.03680000524,
+  "latency_by_hit": {
+    "hit": {
+      "avg": 1974.8901354866784,
+      "p50": 48.17689998890273,
+      "p95": 13433.59440000495
+    },
+    "miss": {
+      "avg": 813.423947945431,
+      "p50": 785.0334999966435,
+      "p95": 2097.200799995335
+    }
+  },
+  "latency_by_tier": {
+    "L1": {
+      "avg": 47.823854556901296,
+      "p50": 44.672399992123246,
+      "p95": 81.11790000111796
+    },
+    "miss": {
+      "avg": 813.423947945431,
+      "p50": 785.0334999966435,
+      "p95": 2097.200799995335
+    },
+    "L2": {
+      "avg": 71.47177980216992,
+      "p50": 69.8522999882698,
+      "p95": 106.05899998336099
+    },
+    "MULTI": {
+      "avg": 12542.547968869747,
+      "p50": 12017.900250008097,
+      "p95": 18744.831400021212
+    }
+  },
+  "requests_per_second": 0.0,
+  "total_tokens_saved": 828944,
+  "total_cost_saved_usd": 1.3709999999999198,
+  "cost_per_1k_queries": 0.11427856964240392,
+  "true_positives": 3696,
+  "false_positives": 1706,
+  "true_negatives": 2291,
+  "false_negatives": 4304,
+  "precision": 0.6841910403554239,
+  "recall": 0.462,
+  "f1_score": 0.5515594687360096,
+  "multi_intent_hit_rate": 0.6950710108604845,
+  "swr_hits": 0,
+  "streaming_hits": 0,
+  "circuit_breaker_triggers": 0,
+  "error_count": 0,
+  "error_rate": 0.0,
+  "peak_memory_mb": 0.0,
+  "final_cache_size": 0
+}

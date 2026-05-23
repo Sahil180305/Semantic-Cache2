@@ -1,96 +1,52 @@
-# Documentation Index & Navigation Guide
+# Documentation Index
 
-**Project**: Production-Grade Semantic Caching Layer  
-**Last Updated**: May 18, 2026  
-**Status**: All Phases Complete (Phase 1–9)  
+This is the canonical map for the Semantic Cache project documentation.
 
----
+## Start Here
 
-## 🚀 Welcome to the Project
+- [Repository README](../README.md): project overview and first commands.
+- [Setup Guide](guides/SETUP.md): local backend and infrastructure setup.
+- [Usage Guide](guides/USAGE_GUIDE.md): API workflows and examples.
+- [Quick Reference](guides/QUICK_REFERENCE.md): endpoints, commands, and environment keys.
 
-This index acts as a central map for all project documentation. The files listed here will guide you from initial local environment setup to production-grade implementation and analytics visualization.
+## Architecture
 
-### Documentation Map
+- [System Architecture](architecture/ARCHITECTURE.md): current backend architecture and data flow.
+- [Query Flow Explained](QUERY_FLOW_EXPLAINED.md): exact, semantic, chat, stream, and miss handling.
+- [Architecture Comparison](ARCHITECTURE_COMPARISON.md): planned vs implemented architecture.
 
-```
-docs/
-├── FEATURES.md                 # Detailed breakdown of advanced features (SWR, Streaming, CB, etc.)
-│
-├── guides/
-│   ├── SETUP.md                # Quickstart, Docker setup, and environment configurations
-│   ├── USAGE_GUIDE.md          # Multi-provider usage (Langchain, LlamaIndex) & RAG examples
-│   ├── LLM_INTEGRATION.md      # Auto-miss recovery and timing-accurate stream caching guides
-│   └── FRONTEND.md             # Running the Analytics Dashboard and Consumer Chat applications
-│
-└── architecture/
-    └── ARCHITECTURE.md         # High-level architecture, multi-tier data flows, and schemas
-```
+## Feature Guides
 
----
+- [Features](FEATURES.md): current feature inventory.
+- [LLM Integration](guides/LLM_INTEGRATION.md): Gemini, local/Ollama, and OpenAI status.
+- [Frontend Guide](guides/FRONTEND.md): dashboard and chat app status.
+- [Deployment Guide](guides/DEPLOYMENT.md): container and production notes.
+- [Future Improvements](FUTURE_IMPROVEMENTS.md): cleaned roadmap.
 
-## 📖 Directory & Document Reference
+## Component Guides
 
-### 1. **[Feature Reference](./FEATURES.md)**
-- **Scope:** Detailed breakdowns of all advanced caching features.
-- **Includes:** 
-  - Stale-While-Revalidate (SWR) background tasks
-  - Timing-authentic Streaming Caches (SSE)
-  - Circuit Breaker CLOSED/OPEN/HALF_OPEN state engine
-  - Context-Aware composite conversational keys
-  - Multi-intent query normalizers and rule detectors
+The phase guides are now concise component references. They are useful when working directly with cache internals:
 
-### 2. **[Setup Guide](./guides/SETUP.md)**
-- **Scope:** Complete guide to installing, configuring, and running the cache locally or via Docker.
-- **Includes:**
-  - Python and venv installation commands
-  - Redis, PostgreSQL, Prometheus, and Grafana docker configurations
-  - Environment variables template (`LLM_PROVIDER`, `LLM_API_KEY`, etc.)
-  - Testing suite executions (`pytest`)
+- [Foundation](guides/PHASE_1_1_FOUNDATION_USAGE.md)
+- [Embedding Service](guides/PHASE_1_2_EMBEDDING_SERVICE_USAGE.md)
+- [Similarity Search](guides/PHASE_1_3_SIMILARITY_SEARCH_USAGE.md)
+- [L1 Cache](guides/PHASE_1_4_L1_CACHE_USAGE.md)
+- [L2 Cache](guides/PHASE_1_5_L2_CACHE_USAGE.md)
+- [Deduplication](guides/PHASE_1_6_DEDUP_USAGE.md)
+- [Caching Policies](guides/PHASE_1_7_POLICIES_USAGE.md)
+- [Performance](guides/PHASE_1_8_PERFORMANCE_USAGE.md)
+- [Multi-Tenancy](guides/PHASE_1_9_MULTITENANCY_USAGE.md)
 
-### 3. **[Usage Guide](./guides/USAGE_GUIDE.md)**
-- **Scope:** Implementation examples demonstrating client-side caching.
-- **Includes:**
-  - Standard REST calls for exact or semantic matches
-  - Context-aware RAG pipeline integrations
-  - Connecting LangChain and LlamaIndex agents to the API
-  - Auto-fallback LLM query examples
+## Phase 2 API Notes
 
-### 4. **[System Architecture](./architecture/ARCHITECTURE.md)**
-- **Scope:** Under-the-hood design decisions and layout maps.
-- **Includes:**
-  - High-level ASCII architecture diagram
-  - Data flows for cache hits and cache misses
-  - HNSW in-memory (L1), Redis warm (L2), and PostgreSQL cold (L3) storage configurations
-  - Database schema diagrams for queries, metrics, and tenants
+- [Phase 2 Overview](phase_2/README.md)
+- [API Design](phase_2/API_DESIGN.md)
+- [Implementation Guide](phase_2/IMPLEMENTATION_GUIDE.md)
+- [Status Report](phase_2/STATUS_REPORT.md)
 
-### 5. **[LLM Integration](./guides/LLM_INTEGRATION.md)**
-- **Scope:** How the backend coordinates semantic queries with LLMs.
-- **Includes:**
-  - Configuring Gemini or OpenAI API keys
-  - The automatic cache-miss fallback mechanism
-  - Token-replay timing offsets for streaming channels
+## Documentation Maintenance Rules
 
-### 6. **[Frontend Applications](./guides/FRONTEND.md)**
-- **Scope:** Guides for the Web Visual Suite.
-- **Includes:**
-  - Running the Next.js Analytics Dashboard (WebSocket metrics, Recharts tables)
-  - Interfacing with the Consumer Chat Client to test smart routing badging
-
----
-
-## 🎓 Learning Paths by Role
-
-### 🛠️ Backend Developers
-1. Set up your environment using **[Setup Guide](./guides/SETUP.md)**.
-2. Review data schemas in **[System Architecture](./architecture/ARCHITECTURE.md)**.
-3. Call standard cache endpoints following **[Usage Guide](./guides/USAGE_GUIDE.md)**.
-
-### 🧠 ML/AI Engineers
-1. Understand normalizers and detectors in **[Feature Reference](./FEATURES.md)**.
-2. Read how fallback caching is orchestrated in **[LLM Integration](./guides/LLM_INTEGRATION.md)**.
-3. Customize similarity thresholds per-domain using configurations in **[Setup Guide](./guides/SETUP.md)**.
-
-### 🖥️ Full-Stack & DevOps Engineers
-1. Configure tiered backing services in **[Setup Guide](./guides/SETUP.md)**.
-2. Deploy the visual suite following **[Frontend Applications](./guides/FRONTEND.md)**.
-3. Access Prometheus metrics and Grafana alerts detailed in **[System Architecture](./architecture/ARCHITECTURE.md)**.
+- Prefer current code behavior over older phase claims.
+- Keep examples copy-pasteable.
+- Mark placeholders honestly.
+- Avoid duplicate architecture diagrams across files; link to the canonical architecture page instead.

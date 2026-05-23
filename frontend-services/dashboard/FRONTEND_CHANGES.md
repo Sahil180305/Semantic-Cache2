@@ -1,24 +1,32 @@
-# Frontend Changes Required for Backend Connection
+# Dashboard Backend Connection Plan
 
-Currently, the dashboard frontend uses **dummy data** for demonstration purposes. 
-To connect the frontend to the actual backend API endpoints, you need to navigate to the following files and uncomment the actual API connection logic inside their respective `useEffect` hooks, and remove or comment out the dummy data logic.
+## Current State
 
-### 1. Overview Page (`src/app/page.tsx`)
-*   **What to change**: 
-    *   Uncomment the block inside `useEffect` under `// TODO: Uncomment when connecting to actual backend`. This block handles fetching `/insights/top-queries`, `/metrics/historical`, and setting up the WebSocket connection to `ws://localhost:8000/ws/realtime`.
-    *   Comment out or remove the section under `// DUMMY DATA LOGIC`.
+The dashboard has polished pages for overview, query patterns, semantic clusters, and cost analytics. The current UI mostly uses dummy data.
 
-### 2. Query Patterns Page (`src/app/patterns/page.tsx`)
-*   **What to change**:
-    *   Uncomment the fetch calls inside `useEffect` targeting `/insights/patterns` and `/insights/recent`.
-    *   Comment out or remove the `setPatterns` and `setRecentQueries` calls with hardcoded dummy data.
+## Backend Gap
 
-### 3. Semantic Clusters Page (`src/app/clusters/page.tsx`)
-*   **What to change**:
-    *   Uncomment the fetch call inside `useEffect` targeting `/insights/clusters`.
-    *   Comment out or remove the `for` loop that generates random coordinates for the `dummyClusters`.
+Analytics endpoints exist in `src/api/routes/analytics.py`, but `src/api/main.py` does not mount that router. Until mounted, dashboard calls to metrics, historical metrics, top queries, or realtime WebSocket data will not work.
 
-### 4. Cost Analytics Page (`src/app/cost/page.tsx`)
-*   **What to change**:
-    *   Uncomment the fetch call inside `useEffect` targeting `/metrics/cost`.
-    *   Comment out or remove the `setCostData` and `setTotalSaved` calls that use dummy data values.
+## Required Backend Work
+
+1. Mount analytics routes in `src/api/main.py`.
+2. Decide the prefix, for example `/api/v1/analytics`.
+3. Add auth dependencies to analytics routes.
+4. Connect realtime, historical, and top-query data to real cache metrics.
+5. Add tests for each endpoint.
+
+## Required Frontend Work
+
+1. Replace hard-coded API URLs with environment variables.
+2. Add bearer token handling.
+3. Replace dummy data blocks in pages with live fetches.
+4. Add loading and error states.
+5. Add WebSocket reconnect behavior if realtime metrics are kept.
+
+## Suggested Environment
+
+```text
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8000
+```

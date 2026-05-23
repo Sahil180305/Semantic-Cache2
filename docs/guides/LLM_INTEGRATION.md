@@ -1,141 +1,53 @@
-# Modular LLM Integration Guide
+# LLM Integration
 
-This guide describes how the Semantic Cache integrates downstream Large Language Models (LLMs) to automatically handle cache misses, support streaming responses, and capture token generation timings.
+## Purpose
 
----
+The LLM service is used when semantic cache lookup misses. A generated response can then be cached for future exact or semantic hits.
 
-## 🗺️ Architectural Context
+## Providers
 
-When a client queries the semantic cache, the request follows a similarity search path. If a cache miss occurs (no entry satisfies the similarity threshold), the system automatically intercepts the miss, generates the response via a modular LLM adapter, writes it asynchronously to L1/L2/L3 cache tiers, and returns the result.
+| Provider | Status | Notes |
+| --- | --- | --- |
+| Gemini | Implemented | Uses Google Generative Language REST API. |
+| Local/Ollama | Implemented | Uses `/api/generate` on a local Ollama server. |
+| OpenAI | Placeholder | Methods return placeholder text. |
 
-```
-                  ┌───────────────────────────────┐
-                  │ Client: GET /semantic/search  │
-                  └───────────────┬───────────────┘
-                                  │
-                                  ▼
-                     [ 🔎 Similarity Search ]
-                                  │
-                     ┌────────────┴────────────┐
-                     │                         │
-            (Cache Hit > Threshold)   (Cache Miss)
-                     │                         │
-                     ▼                         ▼
-             [ Return Cache ]        [ 🤖 LLMService ]
-                                               │
-                                               ▼
-                                      [ Generate Response ]
-                                               │
-                                     ┌─────────┴─────────┐
-                                     │                   │
-                                (Flat Text)         (SSE Stream)
-                                     │                   │
-                                     ▼                   ▼
-                               [ put_semantic ]   [ Timing Recorded ]
-                                     │                   │
-                                     ▼                   ▼
-                              [ Async Write ]    [ Timing Playback ]
+## Environment
+
+Gemini:
+
+```text
+LLM_PROVIDER=gemini
+LLM_API_KEY=your_gemini_key
+LLM_MODEL=gemini-pro
 ```
 
----
+Local/Ollama:
 
-## 🧩 LLMService Component
-
-- **File Path:** [service.py](file:///c:/Coding/Project%20Btech/Semantic-Cache/src/llm/service.py)
-- **Class:** `LLMService`
-
-The `LLMService` implements a unified, thread-safe asynchronous manager supporting pluggable adapters.
-
-### Supported Providers
-1. **Google Gemini (Default):** Calls the standard Google Generative Language REST API (`/v1beta/models/gemini-pro:generateContent` and `streamGenerateContent`).
-2. **OpenAI (Stub):** Pluggable placeholder driver supporting seamless integration with standard OpenAI clients.
-
-### Interface Details
-```python
-class LLMService:
-    async def generate_response(
-        self, 
-        prompt: str, 
-        provider: Optional[str] = None
-    ) -> str:
-        """
-        Generates a flat, non-streaming text response from the LLM.
-        """
-        ...
-
-    async def generate_stream(
-        self, 
-        prompt: str, 
-        provider: Optional[str] = None
-    ) -> AsyncGenerator[str, None]:
-        """
-        Yields tokens/chunks from the LLM via SSE.
-        """
-        ...
+```text
+LLM_PROVIDER=local
+LOCAL_LLM_BASE_URL=http://localhost:11434
+LOCAL_LLM_MODEL=qwen2.5:1.5b
+LOCAL_LLM_TEMPERATURE=0.7
+LOCAL_LLM_TIMEOUT=60
+LOCAL_LLM_STREAM_TIMEOUT=120
 ```
 
----
+## Miss Flow
 
-## 🔄 Automatic Fallback Loop
+1. Semantic search runs first.
+2. If no hit is found, the API checks `app.state.llm_service`.
+3. The configured provider generates a response.
+4. The response is cached with metadata `source=llm_generated`.
+5. The client receives `hit=false` and `hit_reason=miss_llm_generated`.
 
-When executing a semantic search request, client applications do not need to construct backend fallback blocks:
+## Streaming
 
-```python
-# From src/api/routes/cache.py
-@router.post("/semantic/search")
-async def search_semantic_cache(body: SemanticSearchRequest):
-    # 1. Search the tiered cache
-    result = await cache_manager.get_semantic(body.query, threshold=body.threshold)
-    
-    if result:
-        return SemanticSearchResponse(
-            hit=True,
-            hit_reason="semantic_match",
-            response=result.response,
-            similarity=result.similarity,
-            latency_ms=timer.elapsed()
-        )
-        
-    # 2. Fallback on Cache Miss
-    llm_response = await llm_service.generate_response(body.query)
-    
-    # 3. Asynchronously store the generated response in the background
-    asyncio.create_task(
-        cache_manager.put_semantic_async(
-            query_text=body.query,
-            response=llm_response,
-            domain="general",
-            metadata={"model": "gemini-pro"}
-        )
-    )
-    
-    return SemanticSearchResponse(
-        hit=False,
-        hit_reason="miss_llm_generated",
-        response=llm_response,
-        similarity=0.0
-    )
-```
+`POST /api/v1/cache/semantic/stream` can stream from the configured LLM and cache tokens. On a future hit, the cached stream is replayed.
 
----
+## Production Notes
 
-## ⚡ SSE Token Stream Recording & Playback
-
-Streaming caches traditionally face a dilemma: *either return flat text immediately (ruining the streaming UX) or re-stream with generic intervals (ruining authentic speeds).*
-
-We solve this through a **Timing-Authentic Streaming Cache**:
-
-### 1. Timing-Authentic Recording (First-time Stream)
-When an LLM stream is fetched for the first time, a special recorder captures both the token text and the exact interval delay since the previous token:
-
-```json
-[
-  {"text": "Quantum ", "delay_ms": 12},
-  {"text": "physics ", "delay_ms": 18},
-  {"text": "is ", "delay_ms": 15}
-]
-```
-These arrays are saved in PostgreSQL as JSON alongside the completed text.
-
-### 2. Authentic Playback (Replay on Hit)
-On subsequent cached stream hits, the SSE router reads the stored timing array and streams tokens back to the client, replicating the original generation latency and behavior.
+- Store API keys in environment variables, not source files.
+- Use local/Ollama for offline demos.
+- Implement OpenAI methods before documenting OpenAI as supported.
+- Add provider health checks for production deployments.

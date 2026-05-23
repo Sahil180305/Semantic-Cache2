@@ -1,5 +1,10 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+# Dashboard Agent Notes
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
+This dashboard uses Next.js 16 and React 19. Before changing framework-specific behavior, check the installed Next.js documentation or package conventions in this workspace.
+
+## Project Notes
+
+- The dashboard is a prototype and currently uses mostly dummy data.
+- Backend analytics routes are not mounted in the FastAPI app.
+- Keep API URLs configurable when wiring live data.
+- Run `npm run lint` after frontend edits.
