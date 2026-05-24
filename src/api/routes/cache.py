@@ -678,6 +678,8 @@ async def semantic_cache_stream(
 
 from src.api.models import ChatRequest, Message
 
+LONG_CONVERSATION_HISTORY_LIMIT = 8
+
 @router.post("/chat")
 async def chat(
     req: Request,
@@ -697,16 +699,9 @@ async def chat(
     cache_manager = getattr(req.app.state, 'cache_manager', None)
     if not cache_manager:
         raise HTTPException(status_code=503, detail="Cache disabled")
-        
-    if not hasattr(req.app.state, 'smart_router'):
-        from src.cache.context import SmartCacheRouter
-        embedder = getattr(cache_manager, '_embedding_service', None)
-        req.app.state.smart_router = SmartCacheRouter(cache_manager, embedder)
-        
-    router_instance = req.app.state.smart_router
-    
+
     # 1. Resolve conversation history: prioritize body.history, fallback to header
-    history = body.history
+    history = body.history or []
     if not history and x_conversation_history:
         try:
             raw_history = json.loads(x_conversation_history)
@@ -714,15 +709,54 @@ async def chat(
                 history = [Message(role=item.get("role", "user"), content=item.get("content", "")) for item in raw_history]
         except Exception:
             pass
+
+    llm_service = getattr(req.app.state, 'llm_service', None)
+
+    # Long conversations: skip all cache tiers and do not store the response
+    if len(history) > LONG_CONVERSATION_HISTORY_LIMIT:
+        if not llm_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="LLM service not configured",
+            )
+
+        start_time = time.time()
+        response_text = await llm_service.generate_with_history(body.query, history)
+        latency_ms = round((time.time() - start_time) * 1000, 2)
+
+        if not response_text:
+            response_text = "LLM service not configured."
+        elif response_text.startswith("Error:"):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=response_text,
+            )
+
+        logger.info(
+            "Cache bypassed for long conversation (history_len=%d)",
+            len(history),
+        )
+        return {
+            "response": response_text,
+            "cached": False,
+            "cache_status": "bypassed_long_context",
+            "source": "llm_generated",
+            "latency_ms": latency_ms,
+        }
             
     # Resolve conversation_id (context_id)
     conversation_id = body.context_id or x_conversation_id
 
     # Resolve tenant_id
     resolved_tenant_id = body.tenant_id if body.tenant_id and body.tenant_id != "default" else tenant_id
-    
-    llm_service = getattr(req.app.state, 'llm_service', None)
-    
+
+    if not hasattr(req.app.state, 'smart_router'):
+        from src.cache.context import SmartCacheRouter
+        embedder = getattr(cache_manager, '_embedding_service', None)
+        req.app.state.smart_router = SmartCacheRouter(cache_manager, embedder)
+
+    router_instance = req.app.state.smart_router
+
     # 2. Invoke SmartCacheRouter.handle_chat statelessly
     cache_result = await router_instance.handle_chat(
         query=body.query,
@@ -737,8 +771,9 @@ async def chat(
     return {
         "response": cache_result.get("response"),
         "cached": cache_result.get("hit", False),
+        "cache_status": "hit" if cache_result.get("hit", False) else "miss",
         "source": cache_result.get("source", "llm_generated"),
         "rewritten_query": cache_result.get("rewritten_query"),
-        "sub_queries": cache_result.get("sub_queries")
+        "sub_queries": cache_result.get("sub_queries"),
     }
 

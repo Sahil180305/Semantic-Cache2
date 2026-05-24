@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, List, Any, Dict
 import httpx
 
 from src.core.config import LLMConfig
@@ -30,6 +30,47 @@ class LLMService:
         
         if self.provider in ("local", "ollama"):
             logger.info(f"Local LLM configured: {self.local_model} at {self.local_base_url}")
+
+    async def generate_with_history(
+        self,
+        query: str,
+        history: Optional[List[Any]] = None,
+        system_prompt: Optional[str] = None,
+    ) -> Optional[str]:
+        """Generate a response using full conversation history (no caching)."""
+        messages: List[Dict[str, str]] = []
+        for msg in history or []:
+            role = msg.role if hasattr(msg, "role") else msg.get("role", "user")
+            content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": query})
+
+        if self.provider not in ("local", "ollama") and not self.api_key:
+            logger.warning(f"No API key for cloud provider '{self.provider}', skipping generation")
+            return None
+
+        try:
+            if self.provider in ("local", "ollama"):
+                return await self._call_local_chat(messages, system_prompt)
+            elif self.provider == "gemini":
+                return await self._call_gemini_chat(messages, system_prompt)
+            else:
+                prompt = self._history_to_prompt(messages, system_prompt)
+                return await self.generate_response(prompt, system_prompt=None)
+        except Exception as e:
+            logger.error(f"Error generating LLM response with history: {e}")
+            return None
+
+    @staticmethod
+    def _history_to_prompt(messages: List[Dict[str, str]], system_prompt: Optional[str] = None) -> str:
+        lines = []
+        if system_prompt:
+            lines.append(f"System: {system_prompt}\n")
+        for msg in messages:
+            role = msg.get("role", "user").capitalize()
+            lines.append(f"{role}: {msg.get('content', '')}")
+        lines.append("Assistant:")
+        return "\n".join(lines)
 
     async def generate_response(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[str]:
         """Generate a response using the configured LLM provider."""
@@ -90,6 +131,73 @@ class LLMService:
         except Exception as e:
             logger.warning(f"Local Ollama health check failed: {e}")
             return False
+
+    async def _call_local_chat(
+        self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
+    ) -> Optional[str]:
+        """Call local Ollama chat API with multi-turn history."""
+        url = f"{self.local_base_url}/api/chat"
+        payload = {
+            "model": self.local_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": self.local_temperature,
+                "num_predict": 2048,
+            },
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, timeout=self.local_timeout)
+                response.raise_for_status()
+                data = response.json()
+                if "error" in data:
+                    return f"Error: {data['error']}"
+                return data.get("message", {}).get("content", "").strip()
+        except httpx.ConnectError:
+            logger.error(f"Could not connect to local Ollama service at {self.local_base_url}")
+            return "Error: Local LLM service is not available. Please ensure Ollama is running at " + self.local_base_url
+        except httpx.TimeoutException:
+            logger.error(f"Local LLM chat request timed out after {self.local_timeout}s")
+            return "Error: Local LLM request timed out."
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Local LLM chat HTTP error: {e.response.status_code} - {e.response.text}")
+            if e.response.status_code == 404:
+                return f"Error: Model '{self.local_model}' not found. Please pull it using 'ollama pull {self.local_model}'"
+            return f"Error: Local LLM returned error {e.response.status_code}"
+        except Exception as e:
+            logger.error(f"Error calling local LLM chat: {e}")
+            return "Error: Failed to get response from local LLM."
+
+    async def _call_gemini_chat(
+        self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
+    ) -> Optional[str]:
+        """Call Gemini with multi-turn conversation history."""
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+
+        contents = []
+        if system_prompt:
+            contents.append({"role": "user", "parts": [{"text": f"System: {system_prompt}"}]})
+            contents.append({"role": "model", "parts": [{"text": "Understood."}]})
+
+        for msg in messages:
+            role = "model" if msg.get("role") == "assistant" else "user"
+            contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+
+        payload = {"contents": contents}
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=60.0)
+            response.raise_for_status()
+            data = response.json()
+            try:
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError):
+                logger.error(f"Unexpected response format from Gemini: {data}")
+                return "Error: Could not parse response from Gemini."
 
     async def _call_local(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[str]:
         """Call local Ollama API for standard generation."""

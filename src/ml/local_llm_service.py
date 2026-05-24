@@ -2,8 +2,38 @@ import json
 import logging
 from typing import List, Optional, Dict, Any, Union, AsyncGenerator
 import httpx
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
+
+# for normalisation so that cache hits are more likely even if user uses abbreviations in query. This is a simple regex-based approach and can be expanded with more patterns as needed.
+import re
+
+# Common tech/domain abbreviations map
+ABBREVIATION_MAP = {
+    r'\bai\b': 'artificial intelligence',
+    r'\bml\b': 'machine learning',
+    r'\bdl\b': 'deep learning',
+    r'\bnlp\b': 'natural language processing',
+    r'\bllm\b': 'large language model',
+    r'\bgovt\.?\b': 'government',
+    r'\bjs\b': 'javascript',
+    r'\bpy\b': 'python',
+    r'\bts\b': 'typescript',
+    r'\bdb\b': 'database',
+    r'\bui\b': 'user interface',
+    r'\bux\b': 'user experience',
+    r'\bio\b': 'input output',
+    r'\bos\b': 'operating system',
+}
+
+def normalize_abbreviations(self, text: str) -> str:
+    """Replace common abbreviations with full forms using regex."""
+    normalized = text.lower() # Work in lowercase for matching
+    for pattern, replacement in ABBREVIATION_MAP.items():
+        normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+    return normalized
 
 class LocalLLMService:
     """Service for processing text via local LLM via Ollama.
@@ -39,6 +69,36 @@ class LocalLLMService:
             self._ollama_sdk = None
             self._has_sdk = False
             logger.info("Ollama Python SDK not found. Using direct HTTP REST calls.")
+
+        self._dedup_model: Optional[SentenceTransformer] = None
+
+    @property
+    def dedup_model(self) -> SentenceTransformer:
+        """Lazy-load embedding model for sub-query deduplication."""
+        if self._dedup_model is None:
+            self._dedup_model = SentenceTransformer("all-MiniLM-L6-v2")
+        return self._dedup_model
+
+    def _deduplicate_sub_queries(self, query: str, sub_queries: List[str]) -> List[str]:
+        """Remove near-duplicate sub-queries while keeping intent-aligned splits."""
+        if len(sub_queries) <= 1:
+            return sub_queries if sub_queries else [query]
+
+        embeddings = self.dedup_model.encode(sub_queries)
+        original_embedding = self.dedup_model.encode([query])[0]
+
+        kept: List[str] = []
+        for sq, emb in zip(sub_queries, embeddings):
+            if kept:
+                kept_embs = self.dedup_model.encode(kept)
+                sims = cosine_similarity([emb], kept_embs)[0]
+                if max(sims) > 0.92:
+                    continue
+            orig_sim = cosine_similarity([emb], [original_embedding])[0][0]
+            if orig_sim > 0.7:
+                kept.append(sq)
+
+        return kept if kept else [query]
 
     async def health_check(self) -> Dict[str, Any]:
         """Check if Ollama service is available and return available models."""
@@ -301,7 +361,7 @@ class LocalLLMService:
 
     async def rewrite_query(self, query: str, history: List[Any]) -> str:
         """Rewrite a contextual query into a standalone query using conversation history."""
-        if not history:
+        if not history or len(history) == 0:
             return query
             
         # Format the conversation history
@@ -343,18 +403,53 @@ class LocalLLMService:
     async def decompose_query(self, query: str) -> List[str]:
         """Decompose a complex multi-intent query into simpler, independent sub-queries."""
         system_prompt = (
-            "You are a query decomposition assistant. Your task is to break down a complex multi-intent query "
-            "into a JSON list of simpler, independent, standalone sub-queries. "
-            "If the query has only a single intent, return a JSON list containing just the original query.\n"
-            "Requirements:\n"
-            "1. Output ONLY a valid JSON list of strings.\n"
-            "2. Do NOT include any explanations, markdown code blocks (e.g. ```json), or other characters outside the JSON."
+            "You are a query decomposition and normalization assistant.\n\n"
+            "YOUR TASK:\n"
+            "1. Break down complex multi-intent queries into independent sub-queries.\n"
+            "2. EXPAND all abbreviations, acronyms, and shortforms into their full formal terms.\n"
+            "3. If the query has ONLY ONE intent, return a JSON list with ONLY the normalized original query.\n\n"
+            "NORMALIZATION RULES:\n"
+            "- 'ai' → 'artificial intelligence'\n"
+            "- 'ml' → 'machine learning'\n"
+            "- 'dl' → 'deep learning'\n"
+            "- 'nlp' → 'natural language processing'\n"
+            "- 'govt' or 'govt.' → 'government'\n"
+            "- 'db' → 'database'\n"
+            "- 'api' → 'application programming interface' (only if context implies technical definition, otherwise keep API)\n"
+            "- 'js' → 'javascript'\n"
+            "- 'py' → 'python'\n"
+            "- 'cs' → 'computer science'\n"
+            "- Always use lowercase for common nouns, proper case for proper nouns.\n\n"
+            "OUTPUT FORMAT:\n"
+            "- Output ONLY a valid JSON list of strings.\n"
+            "- Use DOUBLE quotes.\n"
+            "- NO markdown, NO explanations, NO trailing commas.\n\n"
+            "EXAMPLES:\n"
+            'Input: "what is ai"\n'
+            'Output: ["what is artificial intelligence"]\n\n'
+            'Input: "explain ml and dl"\n'
+            'Output: ["explain machine learning", "explain deep learning"]\n\n'
+            'Input: "how to use govt data for ai projects"\n'
+            'Output: ["how to use government data for artificial intelligence projects"]\n\n'
+            'Input: "features of python"\n'
+            'Output: ["features of python"]\n\n'
+            'Input: "compare js and py for web dev"\n'
+            'Output: ["compare javascript and python for web development"]\n\n'
+            "NOW PROCESS THE USER QUERY. OUTPUT JSON ONLY:"
         )
+        
         
         prompt = f"Query: {query}\nJSON List of sub-queries:"
         
         try:
-            raw_response = await self._generate(prompt, system=system_prompt)
+            raw_response = await self._generate(prompt, system=system_prompt,temperature=0.1,
+            top_p=0.9,
+            max_tokens=256,
+            stop=["\n\n", "###"]  # Help model stop cleanly
+            )
+        
+            # 🔥 DEBUG: Log raw output to see what model actually returns
+            logger.debug(f"Raw decomposition response: {repr(raw_response)}")
             
             # Clean response for JSON parsing
             cleaned = raw_response.strip()
@@ -369,9 +464,9 @@ class LocalLLMService:
             # Try to parse JSON
             sub_queries = json.loads(cleaned)
             if isinstance(sub_queries, list):
-                # Ensure all items are strings and non-empty
                 result = [str(item).strip() for item in sub_queries if item]
-                return result if result else [query]
+                result = result if result else [query]
+                return self._deduplicate_sub_queries(query, result)
             return [query]
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse query decomposition JSON: {e}")
@@ -381,12 +476,11 @@ class LocalLLMService:
             return [query]
 
     async def synthesize_response(
-        self, 
-        original_query: str, 
-        sub_answers: Union[List[str], List[Dict[str, Any]]]
+        self,
+        original_query: str,
+        sub_answers: Union[List[str], List[Dict[str, Any]]],
     ) -> str:
         """Synthesize answers from sub-queries into a cohesive response answering the original query."""
-        # Convert sub_answers to a structured string
         sub_answers_lines = []
         for i, item in enumerate(sub_answers):
             if isinstance(item, dict):
@@ -395,21 +489,26 @@ class LocalLLMService:
                 sub_answers_lines.append(f"Sub-Query: {q}\nAnswer: {a}")
             else:
                 sub_answers_lines.append(f"Answer Part {i+1}: {item}")
-                
+
         sub_answers_text = "\n\n".join(sub_answers_lines)
-        
+
+        if len(sub_answers) == 1:
+            if isinstance(sub_answers[0], dict):
+                return sub_answers[0].get("response", "No answer found.")
+            return str(sub_answers[0])
+
         system_prompt = (
             "You are an answer synthesis assistant. Your task is to combine the provided answers to sub-queries "
             "into a single, cohesive, comprehensive, and natural-sounding response that directly and fully answers the original user query. "
             "Do NOT mention 'sub-queries' or 'synthesized response' in your output. Just output the final cohesive response."
         )
-        
+
         prompt = (
             f"Original Query: {original_query}\n\n"
             f"Sub-Answers:\n{sub_answers_text}\n\n"
             f"Final Cohesive Response:"
         )
-        
+
         return await self._generate(prompt, system=system_prompt)
 
     async def classify_intent(self, query: str, intents: List[str]) -> Dict[str, Any]:
